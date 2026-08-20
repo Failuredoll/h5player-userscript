@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         HTML5视频播放器增强
-// @version      1.1.0
+// @version      1.1.1
 // @description  倍速播放 Z/X/C，支持所有H5视频网站
 // @author       None
 // @match        *://*/*
