@@ -10,22 +10,49 @@
 (function () {
   'use strict';
 
+  // ========== Cloudflare 验证页检测（必须在任何 DOM 篡改前执行） ==========
+  function isCfChallengePage() {
+    try {
+      if (/challenges\.cloudflare\.com/i.test(location.href)) return true;
+      if (/[\?&](__cf_chl|cf_chl|__cf_chl_rt_tk|__cf_chl_jschl_tk)/i.test(location.href)) return true;
+      if (document.getElementById('challenge-form')) return true;
+      if (document.querySelector('#cf-chl-widget, #turnstile-wrapper, [class*="cf-chl"], [id*="challenge-"], [id*="turnstile"]')) return true;
+      return false;
+    } catch (e) { return false; }
+  }
+
   // ========== hackAttachShadow ==========
+  // 仅收集 shadowRoot 引用（open/closed 均持有引用后仍可查询内部 video），
+  // 不再强制把 mode 改为 'open'，避免篡改页面自身行为、避免被 CF 等反机器人检测判定为异常环境。
   (function hackAttachShadow() {
+    if (isCfChallengePage()) return; // CF 验证页完全不覆写原型
     if (window._hasHackAttachShadow_) return;
     try {
       window._shadowDomList_ = window._shadowDomList_ || [];
-      window.Element.prototype._attachShadow = window.Element.prototype.attachShadow;
+      var origAttach = window.Element.prototype.attachShadow;
+      if (!origAttach || origAttach.__h5p_hooked__) return;
       window.Element.prototype.attachShadow = function () {
-        var arg = arguments;
-        if (arg[0] && arg[0].mode) arg[0].mode = 'open';
-        var shadowRoot = this._attachShadow.apply(this, arg);
-        window._shadowDomList_.push(shadowRoot);
+        var shadowRoot = origAttach.apply(this, arguments);
+        try { window._shadowDomList_.push(shadowRoot); } catch (e) {}
         return shadowRoot;
       };
+      window.Element.prototype.attachShadow.__h5p_hooked__ = true;
+      window._origAttachShadow = origAttach;
       window._hasHackAttachShadow_ = true;
     } catch (e) {}
   })();
+
+  // 恢复原生 attachShadow（进入 CF 验证页等场景时调用，避免被检测）
+  function restoreAttachShadow() {
+    try {
+      if (window._hasHackAttachShadow_ && window._origAttachShadow) {
+        window.Element.prototype.attachShadow = window._origAttachShadow;
+        window.Element.prototype.attachShadow.__h5p_hooked__ = false;
+        window._hasHackAttachShadow_ = false;
+        window._origAttachShadow = null;
+      }
+    } catch (e) {}
+  }
 
   // ========== 工具函数 ==========
   function between(value, min, max) {
@@ -202,6 +229,7 @@
 
   // ========== 键盘事件 ==========
   document.addEventListener('keydown', function (e) {
+    if (isCfChallengePage()) return;
     if (isEditableTarget(e.target)) return;
 
     // 仅允许 Ctrl+←/→（快退/快进），其他组合键忽略
@@ -238,11 +266,19 @@
   }, true);
 
   // ========== 初始化 ==========
+  // Cloudflare 验证页：完全静默退出（恢复原型、不扫描、不监听、不设定时器），
+  // 避免脚本干扰验证或被判定为异常环境。
+  if (isCfChallengePage()) {
+    restoreAttachShadow();
+    return;
+  }
+
   // 延迟首扫，让 document.body 先就绪
   if (document.body) {
     _videoSet = doScan();
   } else {
     document.addEventListener('DOMContentLoaded', function () {
+      if (isCfChallengePage()) { restoreAttachShadow(); return; }
       _videoSet = doScan();
     });
   }
@@ -251,6 +287,12 @@
   var _moTimer = 0;
   if (document.documentElement) {
     new MutationObserver(function () {
+      // 页面中途进入 CF 验证时，恢复原型并停止扫描
+      if (isCfChallengePage()) {
+        restoreAttachShadow();
+        this.disconnect();
+        return;
+      }
       clearTimeout(_moTimer);
       _moTimer = setTimeout(function () {
         if (Date.now() - _lastScanTime >= 500) {
@@ -262,6 +304,7 @@
 
   // 兜底定时扫描：5s（仅在新标签页/无视频时保持激活，有缓存则跳过）
   setInterval(function () {
+    if (isCfChallengePage()) { restoreAttachShadow(); return; }
     if (!isVideoValid(_cachedVideo)) {
       _videoSet = doScan();
     }
